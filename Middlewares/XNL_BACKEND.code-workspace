@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "../../../../Desktop/XNL/XNL_BACKEND"
+		},
+		{
+			"path": "../Controllers"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../Models"
+		},
+		{
+			"path": "../Routes"
+		}
+	],
+	"settings": {}
+}
