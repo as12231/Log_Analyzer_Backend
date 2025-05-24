@@ -59,43 +59,72 @@ const login = async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
-
-
+const crypto = require("crypto");
 const fs = require("fs");
 const readline = require("readline");
+const FileHash = require("../models/FileHash"); 
 
 const uploadLogFile = async (req, res) => {
   try {
     const filePath = req.file.path;
 
+    // 1. Read file and generate hash
+    const fileBuffer = fs.readFileSync(filePath);
+    const fileHash = crypto.createHash("md5").update(fileBuffer).digest("hex");
+
+    // 2. Check if file hash already exists
+    const alreadyUploaded = await FileHash.findOne({ hash: fileHash });
+    if (alreadyUploaded) {
+      return res.status(409).json({
+        success: false,
+        message: "Duplicate file detected. Log file was already uploaded.",
+      });
+    }
+
+    // 3. Parse and deduplicate within file
     const rl = readline.createInterface({
       input: fs.createReadStream(filePath),
       crlfDelay: Infinity,
     });
 
     const logs = [];
+    const seen = new Set();
 
     for await (const line of rl) {
       const regex = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+)\s+(.*)$/;
       const match = line.match(regex);
       if (match) {
         const [_, timestamp, level, message] = match;
-        logs.push({
-          timestamp: new Date(timestamp),
-          level,
-          message,
-        });
+        const key = `${timestamp}|${level}|${message}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          logs.push({
+            timestamp: new Date(timestamp),
+            level,
+            message,
+          });
+        }
       }
     }
 
+    // 4. Insert logs
     await Log.insertMany(logs);
 
-    res.status(201).json({ success: true, message: "Log file uploaded", count: logs.length });
+    // 5. Save hash to prevent future duplicates
+    await FileHash.create({ hash: fileHash });
+
+    res.status(201).json({
+      success: true,
+      message: "Log file processed",
+      count: logs.length,
+    });
+
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ success: false, message: "Failed to upload log file" });
   }
 };
+
 
 // Existing signup or login handlers go here...
 
