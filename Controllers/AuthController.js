@@ -167,8 +167,6 @@ ${logSample.substring(0, 6000)}
     // 5. Save logs and file hash to DB
     await Log.insertMany(logs);
     await FileHash.create({ hash: fileHash });
-
-    // 6. Update user upload stats
     let userStats = await UserUploadStats.findOne({ username });
     if (!userStats) {
       userStats = new UserUploadStats({
@@ -184,7 +182,6 @@ ${logSample.substring(0, 6000)}
     }
     await userStats.save();
 
-    // 7. Clean up and respond
     fs.unlinkSync(filePath);
     res.status(201).json({
       success: true,
@@ -201,36 +198,10 @@ ${logSample.substring(0, 6000)}
   }
 };
 
-
-// 👇 Controller object
-// const llmController = {
-//   ask: (req, res) => {
-//     const prompt = req.query.prompt || "hi";
-
-//     const python = spawn("python3", ["llm_call.py", prompt]);
-
-//     let output = "";
-
-//     python.stdout.on("data", (data) => {
-//       output += data.toString();
-//     });
-
-//     python.stderr.on("data", (data) => {
-//       console.error(`Error from Python: ${data}`);
-//     });
-
-//     python.on("close", (code) => {
-//       if (code !== 0) {
-//         return res.status(500).send("Python script failed.");
-//       }
-//       res.send({ response: output });
-//     });
-//   },
-// };
 const { spawn } = require('child_process');
 
 const askLLM = (req, res) => {
-  const prompt = req.query.prompt || "I am Tharun what is you name";
+  const prompt = req.query.prompt || "I am Nani what is you name";
 
   const pythonProcess = spawn('python3', ['llm_call.py', prompt], {
     env: {
