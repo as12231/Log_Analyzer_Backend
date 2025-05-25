@@ -62,7 +62,37 @@ const login = async (req, res) => {
   }
 };
 
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+
+
+// 🔧 Helper to call Python LLM
+function callAskLLM(prompt) {
+  return new Promise((resolve, reject) => {
+    const pythonProcess = spawn("python3", ["llm_call.py", prompt], {
+      env: {
+        ...process.env,
+        GROQ_API_KEY: process.env.GROQ_API_KEY,
+      },
+    });
+
+    let output = "";
+    let errorOutput = "";
+
+    pythonProcess.stdout.on("data", (data) => {
+      output += data.toString();
+    });
+
+    pythonProcess.stderr.on("data", (data) => {
+      errorOutput += data.toString();
+    });
+
+    pythonProcess.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(`Python error: ${errorOutput}`));
+      }
+      resolve(output);
+    });
+  });
+}
 
 const uploadLogFile = async (req, res) => {
   try {
@@ -73,12 +103,10 @@ const uploadLogFile = async (req, res) => {
     const filePath = req.file.path;
     const username = req.body.username || "anonymous";
 
-    // 1. File hash calculation
+    // ✅ 1. Calculate file hash to prevent duplicates
     const fileBuffer = fs.readFileSync(filePath);
     const fileHash = crypto.createHash("md5").update(fileBuffer).digest("hex");
 
-    // 2. Duplicate check
-    // Remove or comment out this block to accept duplicates:
     const alreadyUploaded = await FileHash.findOne({ hash: fileHash });
     if (alreadyUploaded) {
       fs.unlinkSync(filePath);
@@ -88,15 +116,15 @@ const uploadLogFile = async (req, res) => {
       });
     }
 
-    // 3. Read log lines and deduplicate
+    // ✅ 2. Read file lines and deduplicate
     const rl = readline.createInterface({
       input: fs.createReadStream(filePath),
       crlfDelay: Infinity,
     });
+
     const logs = [];
     const seen = new Set();
     for await (const line of rl) {
-      console.log("Reading line:", line);
       const regex = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+)\s+(.*)$/;
       const match = line.match(regex);
       if (match) {
@@ -113,7 +141,7 @@ const uploadLogFile = async (req, res) => {
       }
     }
 
-    // 4. Prepare prompt for LLM analysis
+    // ✅ 3. Create dynamic prompt for LLM
     const logSample = logs.slice(0, 300).map(log =>
       `[${log.timestamp.toISOString()}] ${log.level}: ${log.message}`
     ).join("\n");
@@ -140,33 +168,33 @@ Now analyze the logs below and return the JSON object:
 ${logSample.substring(0, 6000)}
 `;
 
+    // ✅ 4. Call Python LLM
     let structuredInsights = {};
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      console.log("This is the api key", apiKey);
-      const geminiRes = await axios.post(
-        `${GEMINI_API_URL}?key=${apiKey}`,
-        {
-          contents: [{ parts: [{ text: llmPrompt }] }]
-        },
-        {
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-
-      const insightText = geminiRes.data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      structuredInsights = JSON.parse(insightText);
+      const llmOutput = await callAskLLM(llmPrompt.trim());
+      try {
+        structuredInsights = JSON.parse(llmOutput);
+      } catch (jsonErr) {
+        console.warn("Invalid JSON from LLM:", llmOutput);
+        structuredInsights = {
+          error: "LLM response is not valid JSON",
+          rawResponse: llmOutput,
+          fallback: true,
+        };
+      }
     } catch (err) {
       console.warn("LLM Insight generation failed:", err.message);
       structuredInsights = {
         error: "LLM failed to generate structured insights",
-        fallback: true
+        fallback: true,
       };
     }
 
-    // 5. Save logs and file hash to DB
-    await Log.insertMany(logs);
+    // ✅ 5. Save logs and file hash
+    if (logs.length > 0) await Log.insertMany(logs);
     await FileHash.create({ hash: fileHash });
+
+    // ✅ 6. Update or create user stats
     let userStats = await UserUploadStats.findOne({ username });
     if (!userStats) {
       userStats = new UserUploadStats({
@@ -182,7 +210,10 @@ ${logSample.substring(0, 6000)}
     }
     await userStats.save();
 
+    // ✅ 7. Delete uploaded file
     fs.unlinkSync(filePath);
+
+    // ✅ 8. Return final response
     res.status(201).json({
       success: true,
       message: "Log file processed and analyzed",
