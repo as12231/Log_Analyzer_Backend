@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../Models/User');
 const Log = require('../Models/Logs');
+const UserUploadStats = require("../Models/UserUploadStats"); // Stats model
+
 
 const signup = async (req, res) => {
   try {
@@ -62,11 +64,12 @@ const login = async (req, res) => {
 const crypto = require("crypto");
 const fs = require("fs");
 const readline = require("readline");
-const FileHash = require("../models/FileHash"); 
+const FileHash = require("../Models/FileHash");
 
 const uploadLogFile = async (req, res) => {
   try {
     const filePath = req.file.path;
+    const username = req.body.username || "anonymous";
 
     // 1. Read file and generate hash
     const fileBuffer = fs.readFileSync(filePath);
@@ -80,8 +83,6 @@ const uploadLogFile = async (req, res) => {
         message: "Duplicate file detected. Log file was already uploaded.",
       });
     }
-
-    // 3. Parse and deduplicate within file
     const rl = readline.createInterface({
       input: fs.createReadStream(filePath),
       crlfDelay: Infinity,
@@ -107,26 +108,42 @@ const uploadLogFile = async (req, res) => {
       }
     }
 
-    // 4. Insert logs
     await Log.insertMany(logs);
-
-    // 5. Save hash to prevent future duplicates
     await FileHash.create({ hash: fileHash });
+
+    // 6. Update user upload stats (file count + total lines)
+    let userStats = await UserUploadStats.findOne({ username });
+    if (!userStats) {
+      userStats = new UserUploadStats({
+        username,
+        uploadCount: 1,
+        totalLineCount: logs.length,
+        createdAt: new Date(),
+      });
+    } else {
+      userStats.uploadCount += 1;
+      userStats.totalLineCount += logs.length;
+      userStats.createdAt = new Date(); // update last upload time
+    }
+    await userStats.save();
 
     res.status(201).json({
       success: true,
       message: "Log file processed",
       count: logs.length,
+      uploadCount: userStats.uploadCount,
+      totalLineCount: userStats.totalLineCount,
     });
-
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ success: false, message: "Failed to upload log file" });
   }
 };
 
+module.exports = { uploadLogFile };
 
-// Existing signup or login handlers go here...
+
+
 
 module.exports = {
   signup,
