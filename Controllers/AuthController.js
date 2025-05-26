@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../Models/User');
 const Log = require('../Models/Logs');
 const UserUploadStats = require("../Models/UserUploadStats");
-const FileHash = require("../Models/FileHash"); // For file hash checks
+const FileHash = require("../Models/FileHash");
 const fs = require("fs");
 const crypto = require('crypto');
 const readline = require('readline');
@@ -62,9 +62,227 @@ const login = async (req, res) => {
   }
 };
 
+const ask = async (req, res) => {
+  const logs = [
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:15.000Z",
+      level: 'INFO',
+      message: 'System boot initiated'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:17.000Z",
+      level: 'INFO',
+      message: 'Loading configuration from /etc/sys/config.ini'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:20.000Z",
+      level: 'WARN',
+      message: "Configuration file missing 'network.timeout', using default"
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:25.000Z",
+      level: 'INFO',
+      message: 'Starting network services'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:30.000Z",
+      level: 'ERROR',
+      message: 'Failed to start DHCP service'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:31:35.000Z",
+      level: 'INFO',
+      message: 'System started successfully with warnings'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:45:12.000Z",
+      level: 'INFO',
+      message: "User 'admin' logged in"
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T04:47:02.000Z",
+      level: 'INFO',
+      message: 'Scheduled backup started'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T05:00:55.000Z",
+      level: 'INFO',
+      message: 'Scheduled backup completed successfully'
+    },
+    {
+      username: 'Tharun',
+      timestamp: "2025-05-26T05:30:00.000Z",
+      level: 'WARN',
+      message: 'High memory usage detected: 87%'
+    }
+  ];
 
+  const prompt = `
+Given the following array of log entries in JSON format, analyze and return a JSON object with these fields:
 
-// 🔧 Helper to call Python LLM
+- totalLogs: total number of logs
+- levelCounts: object with count of each log level (INFO, WARN, ERROR)
+- uniqueUsernames: list of unique usernames in the logs
+- earliestTimestamp: earliest timestamp in ISO 8601 format
+- latestTimestamp: latest timestamp in ISO 8601 format
+- topMessages: array of top 3 most frequent messages, each with "message" and "count"
+
+Return ONLY the JSON object with no explanation or extra text.
+
+Log data:
+${JSON.stringify(logs, null, 2)}
+`;
+
+  try {
+    const response = await axios.post(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=YOUR_API_KEY',
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+
+    const reply = response.data.candidates[0].content.parts[0].text;
+
+    // Parse the LLM reply as JSON
+    let insights;
+    try {
+      insights = JSON.parse(reply);
+    } catch (err) {
+      console.error("Failed to parse LLM response as JSON:", err);
+      return res.status(500).json({ success: false, message: "Invalid JSON from LLM" });
+    }
+
+    // You can now store 'insights' in your database or send as response
+    res.status(200).json({ success: true, data: insights });
+  } catch (error) {
+    console.error("Gemini API error:", error.response?.data || error.message);
+    res.status(500).json({ success: false, message: 'Gemini API error' });
+  }
+};
+function parseApacheDate(dateStr) {
+  const [datePart] = dateStr.split(' ');
+  const [day, monStr, yearAndTime] = datePart.split('/');
+  const [year, hour, minute, second] = yearAndTime.split(/[:]/);
+  const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+  const month = monthMap[monStr];
+  return new Date(Date.UTC(parseInt(year), month, parseInt(day), parseInt(hour), parseInt(minute), parseInt(second)));
+}
+
+const uploadLogFile = async (req, res) => {
+  try {
+    const filePath = req.file.path;
+    const username = 'Tharun';
+    const rl = readline.createInterface({
+      input: fs.createReadStream(filePath),
+      crlfDelay: Infinity,
+    });
+    const logs = [];
+    const parsers = [
+      {
+        regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),(\d{3}) - (\w+) - (.*)$/,
+        handler: (m) => ({
+          timestamp: new Date(`${m[1]}.${m[2]}`),
+          level: m[3],
+          message: m[4],
+          extra: {},
+        }),
+      },
+      {
+        regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+)\s+(.*)$/,
+        handler: (m) => ({
+          timestamp: new Date(m[1]),
+          level: m[2],
+          message: m[3],
+          extra: {},
+        }),
+      },
+      {
+        regex: /^\[(\w+)\] \[(.*?)\] (.*)$/,
+        handler: (m) => ({
+          timestamp: new Date(m[2]),
+          level: m[1],
+          message: m[3],
+          extra: {},
+        }),
+      },
+      {
+        regex: /^\{.*"timestamp":.*"level":.*"message":.*\}$/,
+        handler: (m) => {
+          const obj = JSON.parse(m[0]);
+          return {
+            timestamp: new Date(obj.timestamp),
+            level: obj.level,
+            message: obj.message,
+            extra: Object.assign({}, obj, { timestamp: undefined, level: undefined, message: undefined }),
+          };
+        },
+      },
+      {
+        regex: /^[A-Za-z]{3} [ \d]{1,2} \d{2}:\d{2}:\d{2} [\w\-]+ .*/,
+        handler: (m) => ({
+          timestamp: new Date(),
+          level: 'INFO',
+          message: m[0],
+          extra: {},
+        }),
+      },
+      {
+        regex: /^(\d{1,3}(?:\.\d{1,3}){3}) - - \[(.*?)\] "(.*?)" (\d{3}) (\d+)(?: .*?)?$/,
+        handler: (m) => ({
+          timestamp: parseApacheDate(m[2]),
+          level: 'INFO',
+          message: m[3],
+          extra: {
+            ip: m[1],
+            status: m[4],
+            size: m[5],
+          },
+        }),
+      },
+      {
+        regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.*)$/,
+        handler: (m) => ({
+          timestamp: new Date(m[1]),
+          level: m[2],
+          message: m[3],
+          extra: {},
+        }),
+      },
+      
+    ];
+    for await (const line of rl) {
+      let parsed = { username, raw: line, extra: {} };
+      for (const parser of parsers) {
+        const match = line.match(parser.regex);
+        if (match) {
+          const data = parser.handler(match);
+          parsed = { username, raw: line, ...data };
+          break;
+        }
+      }
+      logs.push(parsed);
+    }
+    await Log.insertMany(logs);
+    res.status(201).json({ success: true, message: 'Log file uploaded successfully', count: logs.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to upload log file' });
+  }
+};
+
+const { spawn } = require('child_process');
+
 function callAskLLM(prompt) {
   return new Promise((resolve, reject) => {
     const pythonProcess = spawn("python3", ["llm_call.py", prompt], {
@@ -93,144 +311,6 @@ function callAskLLM(prompt) {
     });
   });
 }
-
-const uploadLogFile = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-
-    const filePath = req.file.path;
-    const username = req.body.username || "anonymous";
-
-    // ✅ 1. Calculate file hash to prevent duplicates
-    const fileBuffer = fs.readFileSync(filePath);
-    const fileHash = crypto.createHash("md5").update(fileBuffer).digest("hex");
-
-    const alreadyUploaded = await FileHash.findOne({ hash: fileHash });
-    if (alreadyUploaded) {
-      fs.unlinkSync(filePath);
-      return res.status(409).json({
-        success: false,
-        message: "Duplicate file detected. Log file was already uploaded.",
-      });
-    }
-
-    // ✅ 2. Read file lines and deduplicate
-    const rl = readline.createInterface({
-      input: fs.createReadStream(filePath),
-      crlfDelay: Infinity,
-    });
-
-    const logs = [];
-    const seen = new Set();
-    for await (const line of rl) {
-      const regex = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+)\s+(.*)$/;
-      const match = line.match(regex);
-      if (match) {
-        const [_, timestamp, level, message] = match;
-        const key = `${timestamp}|${level}|${message}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          logs.push({
-            timestamp: new Date(timestamp),
-            level,
-            message,
-          });
-        }
-      }
-    }
-
-    // ✅ 3. Create dynamic prompt for LLM
-    const logSample = logs.slice(0, 300).map(log =>
-      `[${log.timestamp.toISOString()}] ${log.level}: ${log.message}`
-    ).join("\n");
-
-    const llmPrompt = `
-You are an AI system that analyzes system logs and extracts 5 key insights in JSON format.
-Return only the JSON object (no explanation or extra text).
-The format should be:
-
-{
-  "frequentErrorTypes": ["ErrorType1", "ErrorType2", ...],
-  "mostActiveTimeRange": "HH:MM-HH:MM",
-  "logLevelDistribution": {
-    "INFO": count,
-    "WARN": count,
-    "ERROR": count
-  },
-  "commonMessages": ["Message1", "Message2", ...],
-  "recommendations": ["Action1", "Action2", ...]
-}
-
-Now analyze the logs below and return the JSON object:
-
-${logSample.substring(0, 6000)}
-`;
-
-    // ✅ 4. Call Python LLM
-    let structuredInsights = {};
-    try {
-      const llmOutput = await callAskLLM(llmPrompt.trim());
-      try {
-        structuredInsights = JSON.parse(llmOutput);
-      } catch (jsonErr) {
-        console.warn("Invalid JSON from LLM:", llmOutput);
-        structuredInsights = {
-          error: "LLM response is not valid JSON",
-          rawResponse: llmOutput,
-          fallback: true,
-        };
-      }
-    } catch (err) {
-      console.warn("LLM Insight generation failed:", err.message);
-      structuredInsights = {
-        error: "LLM failed to generate structured insights",
-        fallback: true,
-      };
-    }
-
-    // ✅ 5. Save logs and file hash
-    if (logs.length > 0) await Log.insertMany(logs);
-    await FileHash.create({ hash: fileHash });
-
-    // ✅ 6. Update or create user stats
-    let userStats = await UserUploadStats.findOne({ username });
-    if (!userStats) {
-      userStats = new UserUploadStats({
-        username,
-        uploadCount: 1,
-        totalLineCount: logs.length,
-        createdAt: new Date(),
-      });
-    } else {
-      userStats.uploadCount += 1;
-      userStats.totalLineCount += logs.length;
-      userStats.createdAt = new Date();
-    }
-    await userStats.save();
-
-    // ✅ 7. Delete uploaded file
-    fs.unlinkSync(filePath);
-
-    // ✅ 8. Return final response
-    res.status(201).json({
-      success: true,
-      message: "Log file processed and analyzed",
-      count: logs.length,
-      uploadCount: userStats.uploadCount,
-      totalLineCount: userStats.totalLineCount,
-      structuredInsights,
-    });
-
-  } catch (error) {
-    console.error("Upload error:", error);
-    res.status(500).json({ success: false, message: "Upload and processing failed" });
-  }
-};
-
-const { spawn } = require('child_process');
-
 const askLLM = (req, res) => {
   const prompt = req.query.prompt || "I am Nani what is you name";
 
@@ -264,5 +344,7 @@ module.exports = {
   signup,
   login,
   uploadLogFile,
-  askLLM,
+  ask,
 };
+
+
