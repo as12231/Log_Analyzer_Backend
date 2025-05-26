@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../Models/User');
+const LogSummary = require('../Models/LogSummary');
 const Log = require('../Models/Logs');
+const ChatSession = require('../Models/ChatSession');
 const UserUploadStats = require("../Models/UserUploadStats");
 const FileHash = require("../Models/FileHash");
 const fs = require("fs");
@@ -8,6 +10,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const axios = require('axios');
 const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
 
 const signup = async (req, res) => {
   try {
@@ -61,7 +64,6 @@ const login = async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
-
 const ask = async (req, res) => {
   const logs = [
     {
@@ -76,75 +78,56 @@ const ask = async (req, res) => {
       level: 'INFO',
       message: 'Loading configuration from /etc/sys/config.ini'
     },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:31:20.000Z",
-      level: 'WARN',
-      message: "Configuration file missing 'network.timeout', using default"
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:31:25.000Z",
-      level: 'INFO',
-      message: 'Starting network services'
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:31:30.000Z",
-      level: 'ERROR',
-      message: 'Failed to start DHCP service'
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:31:35.000Z",
-      level: 'INFO',
-      message: 'System started successfully with warnings'
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:45:12.000Z",
-      level: 'INFO',
-      message: "User 'admin' logged in"
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T04:47:02.000Z",
-      level: 'INFO',
-      message: 'Scheduled backup started'
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T05:00:55.000Z",
-      level: 'INFO',
-      message: 'Scheduled backup completed successfully'
-    },
-    {
-      username: 'Tharun',
-      timestamp: "2025-05-26T05:30:00.000Z",
-      level: 'WARN',
-      message: 'High memory usage detected: 87%'
-    }
-  ];
+  ];  // your logs array
 
   const prompt = `
-Given the following array of log entries in JSON format, analyze and return a JSON object with these fields:
+this is the data [
+  {
+    "username": "Tharun",
+    "timestamp": "2025-05-26T02:10:00.000Z",
+    "level": "INFO",
+    "message": "System started"
+  },
+  {
+    "username": "Tharun",
+    "timestamp": "2025-05-26T02:15:30.000Z",
+    "level": "ERROR",
+    "message": "Disk read failure on /dev/sda1"
+  },
+  {
+    "username": "Tharun",
+    "timestamp": "2025-05-26T02:16:45.000Z",
+    "level": "WARN",
+    "message": "System running in degraded mode"
+  },
+  {
+    "username": "Tharun",
+    "timestamp": "2025-05-26T02:18:20.000Z",
+    "level": "INFO",
+    "message": "Attempting disk recovery"
+  },
+  {
+    "username": "Tharun",
+    "timestamp": "2025-05-26T02:20:00.000Z",
+    "level": "INFO",
+    "message": "Disk recovery successful"
+  }
+]
 
-- totalLogs: total number of logs
-- levelCounts: object with count of each log level (INFO, WARN, ERROR)
-- uniqueUsernames: list of unique usernames in the logs
-- earliestTimestamp: earliest timestamp in ISO 8601 format
-- latestTimestamp: latest timestamp in ISO 8601 format
-- topMessages: array of top 3 most frequent messages, each with "message" and "count"
 
-Return ONLY the JSON object with no explanation or extra text.
-
+{
+  "time_series": [{"timestamp": "...", "error_count": 0, "warning_count": 0, "info_count": 0}],
+  "log_level_distribution": {"INFO": 0, "DEBUG": 0, "ERROR": 0, "WARNING": 0},
+  "top_messages": [{"message": "string", "count": 0}],
+  "anomalies": [{"timestamp": "...", "description": "string"}]
+}
 Log data:
 ${JSON.stringify(logs, null, 2)}
 `;
 
   try {
     const response = await axios.post(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=YOUR_API_KEY',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyBkczDbMsGA0NBfS9irfhfz0loABLUihl4',
       {
         contents: [{ parts: [{ text: prompt }] }],
       },
@@ -155,22 +138,13 @@ ${JSON.stringify(logs, null, 2)}
 
     const reply = response.data.candidates[0].content.parts[0].text;
 
-    // Parse the LLM reply as JSON
-    let insights;
-    try {
-      insights = JSON.parse(reply);
-    } catch (err) {
-      console.error("Failed to parse LLM response as JSON:", err);
-      return res.status(500).json({ success: false, message: "Invalid JSON from LLM" });
-    }
-
-    // You can now store 'insights' in your database or send as response
-    res.status(200).json({ success: true, data: insights });
+    res.status(200).json({ success: true, data: reply });
   } catch (error) {
     console.error("Gemini API error:", error.response?.data || error.message);
     res.status(500).json({ success: false, message: 'Gemini API error' });
   }
 };
+
 function parseApacheDate(dateStr) {
   const [datePart] = dateStr.split(' ');
   const [day, monStr, yearAndTime] = datePart.split('/');
@@ -340,11 +314,103 @@ const askLLM = (req, res) => {
     res.send(output);
   });
 };
+
+const generateInsights = async (req, res) => {
+  try {
+    const logs = await Log.find({}).sort({ timestamp: -1 }).limit(50); // last 50 logs
+
+    const prompt = `
+Analyze the following log data and return JSON with:
+- time_series (timestamps with error, warning, info count)
+- log_level_distribution
+- top_messages
+- anomalies
+
+Logs:
+${JSON.stringify(logs, null, 2)}
+
+Respond in:
+{
+  "time_series": [...],
+  "log_level_distribution": {...},
+  "top_messages": [...],
+  "anomalies": [...]
+}
+`;
+
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    let summaryText = response.data.candidates[0].content.parts[0].text;
+
+    // Clean markdown code fences before parsing
+    summaryText = summaryText.replace(/```json|```/g, '').trim();
+
+    const summaryJson = JSON.parse(summaryText);
+    const savedSummary = await LogSummary.create(summaryJson);
+
+    res.status(200).json({ success: true, summary: savedSummary });
+  } catch (error) {
+    console.error("Generate Insights Error:", error.response?.data || error);
+    res.status(500).json({ success: false, message: 'Error generating insights' });
+  }
+};
+
+
+const chatWithLogs = async (req, res) => {
+  try {
+    const { question } = req.body;
+    if (!question) {
+      return res.status(400).json({ success: false, message: 'Question is required' });
+    }
+
+    const logs = await Log.find().sort({ timestamp: -1 }).limit(2);
+    const logsData = logs.map(log => ({
+      // Select only essential fields from each log
+      id: log._id,
+      timestamp: log.timestamp,
+      message: log.message,
+    }));
+    const prompt = `
+Given this log data:
+${JSON.stringify(logsData, null, 2)}
+
+Answer the question: ${question}
+`;
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+      },
+      { headers: { 'Content-Type': 'application/json' },
+      timeout: 15000, }
+    );
+    console.log("Responce came",response)
+    const candidates = response.data?.candidates;
+    const answer = candidates && candidates.length > 0
+      ? candidates[0].content.parts[0].text
+      : 'No answer generated';
+      const session_id = uuidv4();
+
+    await ChatSession.create({ session_id, question, answer });
+
+    res.status(200).json({ success: true, answer });
+  } catch (error) {
+    console.error("Chat Error:", error.response?.data || error);
+    res.status(500).json({ success: false, message: 'Chat processing failed' });
+  }
+};
+
+
+
 module.exports = {
   signup,
   login,
   uploadLogFile,
-  ask,
+  ask,generateInsights,chatWithLogs,
 };
 
 
