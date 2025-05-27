@@ -1,3 +1,5 @@
+
+
 const jwt = require('jsonwebtoken');
 const User = require('../Models/User');
 const LogSummary = require('../Models/LogSummary');
@@ -12,6 +14,7 @@ const axios = require('axios');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const UploadMeta = require('../Models/UploadMeta');
 
 const signup = async (req, res) => {
   try {
@@ -154,16 +157,56 @@ function parseApacheDate(dateStr) {
   const month = monthMap[monStr];
   return new Date(Date.UTC(parseInt(year), month, parseInt(day), parseInt(hour), parseInt(minute), parseInt(second)));
 }
-
 const uploadLogFile = async (req, res) => {
   try {
     const filePath = req.file.path;
     const username = 'Tharun';
+
+    const lastLog = await Log.findOne({ upload_id: { $exists: true } }).sort({ upload_id: -1 }).exec();
+    const newUploadId = typeof lastLog?.upload_id === 'number' ? lastLog.upload_id + 1 : 0;
+    let logType = 'unknown';
+    const ext = path.extname(req.file.originalname).toLowerCase();
+
+    if (ext === '.json') {
+      logType = 'json';
+    } else if (ext === '.log') {
+      try {
+        const fileContent = fs.readFileSync(req.file.path, 'utf8').toLowerCase();
+        if (fileContent.includes('systemd') || fileContent.includes('kernel') || fileContent.includes('cron')) {
+          logType = 'system';
+        } else if (fileContent.includes('connection received') || fileContent.includes('postgres') || fileContent.includes('mysql')) {
+          logType = 'database';
+        } else if (fileContent.includes('get') || fileContent.includes('post') || fileContent.includes('http/1.1')) {
+          logType = 'web_access';
+        } else if ((fileContent.includes('error') && fileContent.includes('stack')) || fileContent.includes('trace')) {
+          logType = 'web_error';
+        } else if (fileContent.includes('info') || fileContent.includes('warn') || fileContent.includes('debug')) {
+          logType = 'application';
+        } else {
+          logType = 'generic_log';
+        }
+      } catch (err) {
+        console.error("Error reading file content:", err);
+        logType = 'unknown';
+      }
+    }
+
+    const uploadMeta = new UploadMeta({
+      username,
+      upload_id: newUploadId,
+      original_filename: req.file.originalname,
+      log_type: logType,
+    });
+
+    await uploadMeta.save();
+
     const rl = readline.createInterface({
       input: fs.createReadStream(filePath),
       crlfDelay: Infinity,
     });
+
     const logs = [];
+
     const parsers = [
       {
         regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),(\d{3}) - (\w+) - (.*)$/,
@@ -176,6 +219,15 @@ const uploadLogFile = async (req, res) => {
       },
       {
         regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+)\s+(.*)$/,
+        handler: (m) => ({
+          timestamp: new Date(m[1]),
+          level: m[2],
+          message: m[3],
+          extra: {},
+        }),
+      },
+      {
+        regex: /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - (\w+) - (.*)$/,
         handler: (m) => ({
           timestamp: new Date(m[1]),
           level: m[2],
@@ -200,7 +252,9 @@ const uploadLogFile = async (req, res) => {
             timestamp: new Date(obj.timestamp),
             level: obj.level,
             message: obj.message,
-            extra: Object.assign({}, obj, { timestamp: undefined, level: undefined, message: undefined }),
+            extra: Object.fromEntries(
+              Object.entries(obj).filter(([k]) => !['timestamp', 'level', 'message'].includes(k))
+            ),
           };
         },
       },
@@ -235,24 +289,65 @@ const uploadLogFile = async (req, res) => {
           extra: {},
         }),
       },
-      
     ];
+    // your parsers array remains the same...
+
     for await (const line of rl) {
-      let parsed = { username, raw: line, extra: {} };
+      let parsed = { username, raw: line, extra: {}, upload_id: newUploadId };
       for (const parser of parsers) {
         const match = line.match(parser.regex);
         if (match) {
           const data = parser.handler(match);
-          parsed = { username, raw: line, ...data };
+          parsed = { username, raw: line, upload_id: newUploadId, ...data };
           break;
         }
       }
       logs.push(parsed);
     }
+
     await Log.insertMany(logs);
-    res.status(201).json({ success: true, message: 'Log file uploaded successfully', count: logs.length });
+
+    // ✅ Prepare prompt for Gemini
+    const prompt = `
+Here's a collection of log entries in JSON format:
+${JSON.stringify(logs.slice(0, 100), null, 2)}  // Keep the prompt size reasonable
+
+Please summarize the log data, focusing on:
+- Key events and patterns give only 50 words
+- Error messages and warnings give only 50 words
+- Security-related incidents give only 50 words
+- Any notable system behaviors give only 50 words
+just give summary dont give the tarun,filname,upload ok and dontr give word count
+`;
+
+    const geminiResponse = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+      }
+    );
+
+    const answer = geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No summary available';
+
+    // ✅ Send to frontend
+    res.status(201).json({
+      success: true,
+      message: 'Log file uploaded successfully',
+      count: logs.length,
+      upload_id: newUploadId,
+      summary: answer,
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to upload log file' });
+    console.error('Upload failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload log file',
+    });
   }
 };
 
@@ -367,10 +462,15 @@ const chatWithLogs = async (req, res) => {
     if (!question) {
       return res.status(400).json({ success: false, message: 'Question is required' });
     }
+    const lastUpload = await Log.findOne().sort({ upload_id: -1 });
+    if (!lastUpload) {
+      return res.status(404).json({ success: false, message: 'No logs found' });
+    }
+    const latestUploadId = lastUpload.upload_id;
+    const logs = await Log.find({ upload_id: latestUploadId }).sort({ timestamp: 1 });
 
-    const logs = await Log.find().sort({ timestamp: -1 }).limit(2);
+    console.log(logs)
     const logsData = logs.map(log => ({
-      // Select only essential fields from each log
       id: log._id,
       timestamp: log.timestamp,
       message: log.message,
@@ -389,7 +489,6 @@ Answer the question: ${question}
       { headers: { 'Content-Type': 'application/json' },
       timeout: 15000, }
     );
-    console.log("Responce came",response)
     const candidates = response.data?.candidates;
     const answer = candidates && candidates.length > 0
       ? candidates[0].content.parts[0].text
@@ -443,12 +542,87 @@ const getLogStats = async (req, res) => {
     });
   }
 };
+const getLogLevelCounts = async (req, res) => {
+  try {
+    const logs = await Log.find();
+
+    const levelCounts = {};
+    let dbConnectionErrors = 0;
+    let resourceErrors = 0;
+    let fileNotFoundErrors = 0;
+
+    const dbErrorRegex = /db connection|database connection/i;
+    const resourceErrorRegex = /resource not available/i;
+    const fileNotFoundRegex = /file not found/i;
+
+    const patterns = {
+      operationCompleted: /operation completed/i,
+      timeout: /timeout/i,
+      exception: /exception came/i,
+      failedToLoadModule: /failed to load the module/i,
+      connection: /connection/i,
+    };
+
+    const keywordCounts = {
+      operationCompleted: 0,
+      timeout: 0,
+      exception: 0,
+      failedToLoadModule: 0,
+      connection: 0,
+      dbConnectionErrors: 0,
+      resourceErrors: 0,
+      fileNotFoundErrors: 0,
+    };
+
+    logs.forEach(log => {
+      const level = log.level || 'UNKNOWN';
+      levelCounts[level] = (levelCounts[level] || 0) + 1;
+
+      if (log.message) {
+        if (dbErrorRegex.test(log.message)) {
+          dbConnectionErrors++;
+          keywordCounts.dbConnectionErrors++;
+        }
+        if (resourceErrorRegex.test(log.message)) {
+          resourceErrors++;
+          keywordCounts.resourceErrors++;
+        }
+        if (fileNotFoundRegex.test(log.message)) {
+          fileNotFoundErrors++;
+          keywordCounts.fileNotFoundErrors++;
+        }
+
+        if (patterns.operationCompleted.test(log.message)) keywordCounts.operationCompleted++;
+        if (patterns.timeout.test(log.message)) keywordCounts.timeout++;
+        if (patterns.exception.test(log.message)) keywordCounts.exception++;
+        if (patterns.failedToLoadModule.test(log.message)) keywordCounts.failedToLoadModule++;
+        if (patterns.connection.test(log.message)) keywordCounts.connection++;
+      }
+    });
+
+    const uploadLogs = await UploadMeta.find();
+    const logTypeCounts = {};
+    for (const log of uploadLogs) {
+      const type = log.log_type || 'UNKNOWN';
+      logTypeCounts[type] = (logTypeCounts[type] || 0) + 1;
+    }
+    res.json({
+      success: true,
+      levelCounts,
+      logTypeCounts,  
+      keywordCounts,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch log stats' });
+  }
+};
+
+
 
 module.exports = {
   signup,
   login,
   uploadLogFile,
-  ask,generateInsights,chatWithLogs,getLogStats
+  ask,generateInsights,chatWithLogs,getLogStats,getLogLevelCounts
 };
-
 

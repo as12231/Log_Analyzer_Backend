@@ -1,3 +1,4 @@
+
 const mongoose = require('mongoose');
 
 const logSummarySchema = new mongoose.Schema({
@@ -9,3 +10,4 @@ const logSummarySchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('LogSummary', logSummarySchema);
+
