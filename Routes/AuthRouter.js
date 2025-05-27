@@ -16,9 +16,9 @@ router.post('/generate_insights', generateInsights);
 router.post('/ask', chatWithLogs);
 
 // Get Apis
-router.get('/all_insights', getLogStats);
+router.get('/insights', getLogStats);
 router.get('/file_insights', getFileLevelCounts);
-router.get('/hist_insights', getLogLevelCounts);
+router.get('/all_insights', getLogLevelCounts);
 
 
 module.exports = router;
