@@ -570,11 +570,8 @@ const getLogLevelCounts = async (req, res) => {
         },
       },
     ]);
-
-    // Step 3: Fetch only required fields for keyword matching (limit results if needed)
     const messages = await Log.find({}, { message: 1 }).lean();
 
-    // Step 4: Count keyword matches in JS (much faster)
     const keywordCounts = {};
     for (const [key, pattern] of Object.entries(regexPatterns)) {
       keywordCounts[key] = messages.reduce(
@@ -582,14 +579,10 @@ const getLogLevelCounts = async (req, res) => {
         0
       );
     }
-
-    // Await aggregations
     const [levelResult, typeResult] = await Promise.all([
       levelAggregation,
       logTypeAggregation,
     ]);
-
-    // Convert results to objects
     const levelCounts = {};
     levelResult.forEach(item => {
       levelCounts[item._id] = item.count;
@@ -613,11 +606,84 @@ const getLogLevelCounts = async (req, res) => {
 };
 
 
+const getFileLevelCounts = async (req, res) => {
+  try {
+    const regexPatterns = {
+      dbConnectionErrors: /db connection|database connection/i,
+      resourceErrors: /resource not available/i,
+      fileNotFoundErrors: /file not found/i,
+      operationCompleted: /operation completed/i,
+      timeout: /timeout/i,
+      exception: /exception/i,
+      failedToLoadModule: /failed to load/i,
+      connection: /connection/i,
+    };
+
+    const maxUploadDoc = await Log.findOne().sort({ upload_id: -1 }).select('upload_id').lean();
+    const maxUploadId = maxUploadDoc ? maxUploadDoc.upload_id : null;
+    if (!maxUploadId) {
+      return res.status(404).json({ success: false, message: 'No logs found' });
+    }
+
+    const levelAggregation = Log.aggregate([
+      { $match: { upload_id: maxUploadId } },
+      {
+        $group: {
+          _id: { $ifNull: ['$level', 'UNKNOWN'] },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const typeAggregation = UploadMeta.aggregate([
+      { $match: { upload_id: maxUploadId } },
+      {
+        $group: {
+          _id: { $ifNull: ['$log_type', 'UNKNOWN'] },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const messages = await Log.find({ upload_id: maxUploadId }, { message: 1 }).lean();
+
+    const keywordCounts = {};
+    for (const [key, pattern] of Object.entries(regexPatterns)) {
+      keywordCounts[key] = messages.reduce(
+        (acc, log) => acc + (pattern.test(log.message || '') ? 1 : 0),
+        0
+      );
+    }
+
+    const [levelResult, typeResult] = await Promise.all([levelAggregation, typeAggregation]);
+
+    const levelCounts = {};
+    levelResult.forEach(item => {
+      levelCounts[item._id] = item.count;
+    });
+
+    const logTypeCounts = {};
+    typeResult.forEach(item => {
+      logTypeCounts[item._id] = item.count;
+    });
+
+    res.json({
+      success: true,
+      levelCounts,
+      logTypeCounts,
+      keywordCounts,
+    });
+  } catch (error) {
+    console.error('Error in getLogLevelCounts:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch log stats' });
+  }
+};
+
 
 module.exports = {
   signup,
   login,
   uploadLogFile,
-  ask,generateInsights,chatWithLogs,getLogStats,getLogLevelCounts
+  ask,generateInsights,chatWithLogs,getLogStats,getLogLevelCounts,getFileLevelCounts
 };
 
