@@ -468,8 +468,6 @@ const chatWithLogs = async (req, res) => {
     }
     const latestUploadId = lastUpload.upload_id;
     const logs = await Log.find({ upload_id: latestUploadId }).sort({ timestamp: 1 });
-
-    console.log(logs)
     const logsData = logs.map(log => ({
       id: log._id,
       timestamp: log.timestamp,
