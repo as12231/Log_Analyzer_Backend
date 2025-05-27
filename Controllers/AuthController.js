@@ -544,75 +544,72 @@ const getLogStats = async (req, res) => {
 };
 const getLogLevelCounts = async (req, res) => {
   try {
-    const logs = await Log.find();
-
-    const levelCounts = {};
-    let dbConnectionErrors = 0;
-    let resourceErrors = 0;
-    let fileNotFoundErrors = 0;
-
-    const dbErrorRegex = /db connection|database connection/i;
-    const resourceErrorRegex = /resource not available/i;
-    const fileNotFoundRegex = /file not found/i;
-
-    const patterns = {
+    const regexPatterns = {
+      dbConnectionErrors: /db connection|database connection/i,
+      resourceErrors: /resource not available/i,
+      fileNotFoundErrors: /file not found/i,
       operationCompleted: /operation completed/i,
       timeout: /timeout/i,
-      exception: /exception came/i,
-      failedToLoadModule: /failed to load the module/i,
+      exception: /exception/i,
+      failedToLoadModule: /failed to load/i,
       connection: /connection/i,
     };
 
-    const keywordCounts = {
-      operationCompleted: 0,
-      timeout: 0,
-      exception: 0,
-      failedToLoadModule: 0,
-      connection: 0,
-      dbConnectionErrors: 0,
-      resourceErrors: 0,
-      fileNotFoundErrors: 0,
-    };
+    const levelAggregation = Log.aggregate([
+      {
+        $group: {
+          _id: { $ifNull: ['$level', 'UNKNOWN'] },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-    logs.forEach(log => {
-      const level = log.level || 'UNKNOWN';
-      levelCounts[level] = (levelCounts[level] || 0) + 1;
+    const logTypeAggregation = UploadMeta.aggregate([
+      {
+        $group: {
+          _id: { $ifNull: ['$log_type', 'UNKNOWN'] },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-      if (log.message) {
-        if (dbErrorRegex.test(log.message)) {
-          dbConnectionErrors++;
-          keywordCounts.dbConnectionErrors++;
-        }
-        if (resourceErrorRegex.test(log.message)) {
-          resourceErrors++;
-          keywordCounts.resourceErrors++;
-        }
-        if (fileNotFoundRegex.test(log.message)) {
-          fileNotFoundErrors++;
-          keywordCounts.fileNotFoundErrors++;
-        }
+    // Step 3: Fetch only required fields for keyword matching (limit results if needed)
+    const messages = await Log.find({}, { message: 1 }).lean();
 
-        if (patterns.operationCompleted.test(log.message)) keywordCounts.operationCompleted++;
-        if (patterns.timeout.test(log.message)) keywordCounts.timeout++;
-        if (patterns.exception.test(log.message)) keywordCounts.exception++;
-        if (patterns.failedToLoadModule.test(log.message)) keywordCounts.failedToLoadModule++;
-        if (patterns.connection.test(log.message)) keywordCounts.connection++;
-      }
+    // Step 4: Count keyword matches in JS (much faster)
+    const keywordCounts = {};
+    for (const [key, pattern] of Object.entries(regexPatterns)) {
+      keywordCounts[key] = messages.reduce(
+        (acc, log) => acc + (pattern.test(log.message || '') ? 1 : 0),
+        0
+      );
+    }
+
+    // Await aggregations
+    const [levelResult, typeResult] = await Promise.all([
+      levelAggregation,
+      logTypeAggregation,
+    ]);
+
+    // Convert results to objects
+    const levelCounts = {};
+    levelResult.forEach(item => {
+      levelCounts[item._id] = item.count;
     });
 
-    const uploadLogs = await UploadMeta.find();
     const logTypeCounts = {};
-    for (const log of uploadLogs) {
-      const type = log.log_type || 'UNKNOWN';
-      logTypeCounts[type] = (logTypeCounts[type] || 0) + 1;
-    }
+    typeResult.forEach(item => {
+      logTypeCounts[item._id] = item.count;
+    });
+
     res.json({
       success: true,
       levelCounts,
-      logTypeCounts,  
+      logTypeCounts,
       keywordCounts,
     });
   } catch (error) {
+    console.error('Error in getLogLevelCounts:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch log stats' });
   }
 };
