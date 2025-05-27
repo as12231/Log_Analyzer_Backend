@@ -1,0 +1,9 @@
+2025-05-24 10:00:00,001 - INFO - Starting application
+2025-05-24 10:01:10,202 - DEBUG - Loaded configuration file
+2025-05-24 10:02:15,404 - INFO - User login  low
+2025-05-24 10:04:25,809 - ERROR - Failed to connect to database
+2025-05-24 10:05:30,012 - INFO - Retrying  connection
+2025-05-24 10:06:35,214 - INFO - Database connection established
+2025-05-24 10:07:40,417 - DEBUG - Query : SELECT * FROM users
+2025-05-24 10:08:45,619 - INFO - User logout: user_id=123
+2025-05-24 10:09:50,822 - INFO - Shutting  application

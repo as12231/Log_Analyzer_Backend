@@ -11,6 +11,7 @@ const readline = require('readline');
 const axios = require('axios');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
 const signup = async (req, res) => {
   try {
@@ -405,12 +406,49 @@ Answer the question: ${question}
 };
 
 
+const getLogStats = async (req, res) => {
+  try {
+    const totalRows = await Log.countDocuments();
+    
+    const uploadFolderPath = path.join(__dirname, '../uploads'); 
+    let totalFiles = 0;
+    
+    if (fs.existsSync(uploadFolderPath)) {
+      const files = fs.readdirSync(uploadFolderPath);
+      totalFiles = files.filter(file => {
+        const filePath = path.join(uploadFolderPath, file);
+        return fs.statSync(filePath).isFile();
+      }).length;
+    }
+    
+    const uniqueUploads = await Log.distinct('upload_id');
+    const totalUploads = uniqueUploads.length;
+    
+    res.json({
+      success: true,
+      data: {
+        totalRows,
+        totalFiles,
+        totalUploads
+      },
+      message: "Statistics retrieved successfully"
+    });
+    
+  } catch (error) {
+    console.error('Error getting log statistics:', error);
+    res.status(500).json({
+      success: false,
+      message: "Error retrieving statistics",
+      error: error.message
+    });
+  }
+};
 
 module.exports = {
   signup,
   login,
   uploadLogFile,
-  ask,generateInsights,chatWithLogs,
+  ask,generateInsights,chatWithLogs,getLogStats
 };
 
 
