@@ -584,10 +584,20 @@ const getLogLevelCounts = async (req, res) => {
       logTypeAggregation,
     ]);
     const levelCounts = {};
+    let totalLogs = 0;
+    
     levelResult.forEach(item => {
-      levelCounts[item._id] = item.count;
+      let key = item._id.toUpperCase();
+          if (key === 'WARN') key = 'WARNING';
+    
+      if (levelCounts[key]) {
+        levelCounts[key] += item.count;
+      } else {
+        levelCounts[key] = item.count;
+      }
+    
+      totalLogs += item.count;
     });
-
     const logTypeCounts = {};
     typeResult.forEach(item => {
       logTypeCounts[item._id] = item.count;
