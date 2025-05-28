@@ -1,9 +1,0 @@
-2025-05-23 14:12:45 INFO Server started on port 8080
-2025-05-23 14:15:01 WARN High memory usage detected: 85%
-2025-05-23 14:15:30 ERROR Database connection failed: timeout after 5000ms
-2025-05-23 14:16:10 INFO User 'alice' logged in
-2025-05-23 14:17:25 INFO User 'bob' uploaded file 'report.pdf'
-2025-05-23 14:18:50 ERROR File upload failed: disk quota exceeded
-2025-05-23 14:20:00 INFO Scheduled backup completed successfully
-2025-05-23 14:25:33 WARN CPU temperature high: 78°C
-2025-05-23 14:30:45 INFO User 'charlie' logged out
