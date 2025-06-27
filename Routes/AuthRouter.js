@@ -20,7 +20,6 @@ router.get('/insights', getLogStats);
 router.get('/file_insights', getFileLevelCounts);
 router.get('/all_insights', getLogLevelCounts);
 
-
 module.exports = router;
 
 

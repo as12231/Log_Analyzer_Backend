@@ -462,36 +462,76 @@ const chatWithLogs = async (req, res) => {
     if (!question) {
       return res.status(400).json({ success: false, message: 'Question is required' });
     }
+
+    // STEP 1: Ask Gemini if the question is related to log analysis
+    const relevanceCheckPrompt = `
+Is the following question related to analyzing log data? 
+Only answer "yes" or "no".
+
+Question: "${question}"
+`;
+
+    const relevanceResponse = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        contents: [{ parts: [{ text: relevanceCheckPrompt }] }],
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      }
+    );
+
+    const relevanceAnswer = relevanceResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase().trim();
+
+    if (!relevanceAnswer?.startsWith("yes")) {
+      return res.status(200).json({
+        success: true,
+        answer: 'Please ask a question related to the log data.',
+      });
+    }
+
+    // STEP 2: Get latest log data
     const lastUpload = await Log.findOne().sort({ upload_id: -1 });
     if (!lastUpload) {
       return res.status(404).json({ success: false, message: 'No logs found' });
     }
-    const latestUploadId = lastUpload.upload_id;
-    const logs = await Log.find({ upload_id: latestUploadId }).sort({ timestamp: 1 });
+
+    const logs = await Log.find({ upload_id: lastUpload.upload_id }).sort({ timestamp: 1 });
     const logsData = logs.map(log => ({
       id: log._id,
       timestamp: log.timestamp,
       message: log.message,
     }));
+
+    // STEP 3: Build final prompt
     const prompt = `
-Given this log data:
+You are a log analyst. Use only the log data below to answer the user's question.
+
+Log data:
 ${JSON.stringify(logsData, null, 2)}
 
-Answer the question: ${question}
+Question: ${question}
+
+Rules:
+- Do not create charts or visualizations.
+- Do not generate SQL unless asked.
+- If unsure, say you need more specific log context.
 `;
+
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         contents: [{ parts: [{ text: prompt }] }],
       },
-      { headers: { 'Content-Type': 'application/json' },
-      timeout: 15000, }
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+      }
     );
-    const candidates = response.data?.candidates;
-    const answer = candidates && candidates.length > 0
-      ? candidates[0].content.parts[0].text
-      : 'No answer generated';
-      const session_id = uuidv4();
+
+    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No answer generated';
+    const session_id = uuidv4();
 
     await ChatSession.create({ session_id, question, answer });
 
@@ -501,6 +541,7 @@ Answer the question: ${question}
     res.status(500).json({ success: false, message: 'Chat processing failed' });
   }
 };
+
 
 
 const getLogStats = async (req, res) => {
