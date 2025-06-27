@@ -82,7 +82,7 @@ const ask = async (req, res) => {
       level: 'INFO',
       message: 'Loading configuration from /etc/sys/config.ini'
     },
-  ];  // your logs array
+  ];  
 
   const prompt = `
 this is the data [
@@ -290,7 +290,6 @@ const uploadLogFile = async (req, res) => {
         }),
       },
     ];
-    // your parsers array remains the same...
 
     for await (const line of rl) {
       let parsed = { username, raw: line, extra: {}, upload_id: newUploadId };
@@ -307,7 +306,6 @@ const uploadLogFile = async (req, res) => {
 
     await Log.insertMany(logs);
 
-    // ✅ Prepare prompt for Gemini
     const prompt = `
 Here's a collection of log entries in JSON format:
 ${JSON.stringify(logs.slice(0, 100), null, 2)}  // Keep the prompt size reasonable
@@ -333,7 +331,6 @@ just give summary dont give the tarun,filname,upload ok and dontr give word coun
 
     const answer = geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No summary available';
 
-    // ✅ Send to frontend
     res.status(201).json({
       success: true,
       message: 'Log file uploaded successfully',
@@ -463,7 +460,6 @@ const chatWithLogs = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Question is required' });
     }
 
-    // STEP 1: Ask Gemini if the question is related to log analysis
     const relevanceCheckPrompt = `
 Is the following question related to analyzing log data? 
 Only answer "yes" or "no".
@@ -491,7 +487,6 @@ Question: "${question}"
       });
     }
 
-    // STEP 2: Get latest log data
     const lastUpload = await Log.findOne().sort({ upload_id: -1 });
     if (!lastUpload) {
       return res.status(404).json({ success: false, message: 'No logs found' });
@@ -504,7 +499,6 @@ Question: "${question}"
       message: log.message,
     }));
 
-    // STEP 3: Build final prompt
     const prompt = `
 You are a log analyst. Use only the log data below to answer the user's question.
 

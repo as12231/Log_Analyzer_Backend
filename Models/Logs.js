@@ -6,8 +6,8 @@ const LogDataSchema = new mongoose.Schema({
   timestamp: Date,
   level: String,
   message: String,
-  raw: String,           // raw line (for unmatched patterns)
-  extra: mongoose.Schema.Types.Mixed, // additional fields like IP, module, etc.
+  raw: String,         
+  extra: mongoose.Schema.Types.Mixed, 
   upload_id: {
   type: Number,
   required: true,
